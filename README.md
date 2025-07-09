@@ -21,7 +21,7 @@
 Run this in your terminal (you need root access):
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/yourusername/tunnel-watch/main/install.sh)
+bash <(curl -s https://raw.githubusercontent.com/freecyberhawk/tunnel_watch/main/install.sh)
 ```
 It will ask you:
 	1.	Which ports to monitor (comma-separated like 443,8443)
