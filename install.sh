@@ -55,7 +55,7 @@ echo "🟢 Tunnel Monitor started for \$target_ip ports: \$ports"
 while true; do
   all_ok=true
   for port in "\${port_array[@]}"; do
-    nc -z "\$target_ip" "\$port" >/dev/null 2>&1
+    nc -z -w 3 "\$target_ip" "\$port" >/dev/null 2>&1
     if [ \$? -ne 0 ]; then
       echo "[FAIL] Port \$port on \$target_ip is unreachable"
       all_ok=false
