@@ -156,7 +156,7 @@ while true; do
             fail_counters["$port"]=$(( ${fail_counters["$port"]:-0} + 1 ))
             echo "❌ Port $port failure count: ${fail_counters["$port"]}/$fail_limit" | tee -a "$monitor_log"
 
-            if [[ ${fail_counters["$port"]} -ge $fail_limit ]]; then
+            if [[ \${fail_counters["\$port"]:-0} -ge $fail_limit ]]; then
               echo "🔁 Restarting service: $service_name due to $fail_limit consecutive failures on port $port" | tee -a "$monitor_log"
               systemctl restart "$service_name"
               echo "⏳ Waiting $cooldown seconds after restart..." | tee -a "$monitor_log"
