@@ -1,3 +1,5 @@
+![Tunnel Watch](inc/tunnel_watch.jpg)
+
 # 🚇 Tunnel Watch
 
 **Tunnel Watch** is a lightweight and flexible tunnel/port monitoring tool for Linux. It watches local or remote ports (e.g., VPNs, SSH tunnels, reverse proxies) and **automatically restarts** a given `systemd` service if the tunnel fails multiple times in a row.
@@ -36,13 +38,13 @@ The installer will ask:
 
 ## ⚙️ Tunnel Types & Requirements
 
-| Tunnel Type | Purpose                       | Requirements on Remote (Target)                          | Requirements on Local (Monitor)           | Test Method              |
-| ----------- | ----------------------------- | -------------------------------------------------------- | ----------------------------------------- | ------------------------ |
-| `ping`      | Basic IP availability         | Responds to ICMP ping (enabled in firewall)              | `ping` installed                          | ICMP ping                |
-| `http`      | Web tunnel or proxy check     | HTTP server running with `/ping.php` that returns `pong` | `curl` installed                          | Check HTTP response      |
-| `ssh`       | SSH tunnel or port forwarding | SSH server running, key-based auth set up                | Private key in `~/.ssh/`, `ssh` installed | Run `ssh user@host exit` |
-| `frp`       | Reverse proxy tunnel like FRP | `frps` running, reverse port exposed                     | `nc` (netcat) installed                   | Port check with `nc`     |
-| `wireguard` | VPN tunnel with private IPs   | `wg` active, peer config valid                           | `ping`, WireGuard interface up            | Ping remote private IP   |
+| Tunnel Type | Purpose                       | Requirements on Remote (Target)                      | Requirements on Local (Monitor)           | Test Method              |
+| ----------- | ----------------------------- | ---------------------------------------------------- | ----------------------------------------- | ------------------------ |
+| `ping`      | Basic IP availability         | Responds to ICMP ping (enabled in firewall)          | `ping` installed                          | ICMP ping                |
+| `http`      | Web tunnel or proxy check     | HTTP server running with `/ping` that returns `pong` | `curl` installed                          | Check HTTP response      |
+| `ssh`       | SSH tunnel or port forwarding | SSH server running, key-based auth set up            | Private key in `~/.ssh/`, `ssh` installed | Run `ssh user@host exit` |
+| `frp`       | Reverse proxy tunnel like FRP | `frps` running, reverse port exposed                 | `nc` (netcat) installed                   | Port check with `nc`     |
+| `wireguard` | VPN tunnel with private IPs   | `wg` active, peer config valid                       | `ping`, WireGuard interface up            | Ping remote private IP   |
 
 ---
 
@@ -89,10 +91,26 @@ Cooldown time: 10
 
 ## 💡 Advanced Tips
 
-- For `http`, you can create a simple `ping.php` file on your server:
+- For `http`, you can create a simple `ping_server.py` file on your server:
 
-```php
-<?php echo "pong"; ?>
+```python
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/ping':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"pong")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+if __name__ == '__main__':
+    server_address = ('0.0.0.0', 8080)  # you can change the port
+    httpd = HTTPServer(server_address, PingHandler)
+    print("🟢 HTTP Ping Server running on port 8080")
+    httpd.serve_forever()
 ```
 
 - For `ssh`, ensure your public key is added to the remote server's `~/.ssh/authorized_keys`.

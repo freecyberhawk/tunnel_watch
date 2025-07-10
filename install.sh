@@ -67,7 +67,7 @@ while true; do
 
     http)
       for port in "\${port_array[@]}"; do
-        response=\$(curl -s --max-time 3 "http://\$target_ip:\$port/ping.php")
+        response=\$(curl -s --max-time 3 "http://\$target_ip:\$port/ping")
         if [[ "\$response" != "pong" ]]; then
           echo "[FAIL] No valid HTTP response on port \$port"
           all_ok=false
