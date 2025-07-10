@@ -29,9 +29,17 @@ get_input() {
   done
 }
 
-target_ip=$(get_input "Enter the destination IP to check tunnel (e.g. 1.2.3.4): ")
-ports=$(get_input "Enter comma-separated ports to monitor (e.g. 443,8443): ")
 tunnel_type=$(get_input "Enter tunnel type (ping, http, ssh, frp, wireguard): ")
+
+# Defaults for http tunnel type
+if [[ "$tunnel_type" == "http" ]]; then
+  target_ip="127.0.0.1"
+  echo "Using default target IP for HTTP: $target_ip"
+else
+  target_ip=$(get_input "Enter the destination IP to check tunnel (e.g. 127.0.0.1): ")
+fi
+
+ports=$(get_input "Enter comma-separated ports to monitor (e.g. 443,8443): ")
 service_name=$(get_input "Enter the systemd service name to restart: ")
 fail_limit=$(get_input "Enter the number of consecutive failures to trigger restart: ")
 cooldown=$(get_input "Enter seconds to wait after restart before checking again: ")
@@ -57,17 +65,46 @@ while true; do
   case "\$tunnel_type" in
     ping)
       ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1
-      if [ \$? -ne 0 ]; then
-        echo "[FAIL] Ping failed for \$target_ip"
-        all_ok=false
-      else
-        echo "[OK] Ping successful"
-      fi
+      [ \$? -ne 0 ] && echo "[FAIL] Ping failed for \$target_ip" && all_ok=false || echo "[OK] Ping successful"
       ;;
 
     http)
       for port in "\${port_array[@]}"; do
-        response=\$(curl -s --max-time 3 "http://\$target_ip:\$port/ping")
+        py_script="/usr/local/bin/ping_server_\$port.py"
+        cat <<PYEOF > "\$py_script"
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/ping':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"pong")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        return
+
+if __name__ == '__main__':
+    server_address = ('0.0.0.0', $port)
+    httpd = HTTPServer(server_address, PingHandler)
+    print(f"🟢 Ping server running on port {server_address[1]}")
+    httpd.serve_forever()
+PYEOF
+
+        chmod +x "\$py_script"
+        if ! lsof -i :\$port >/dev/null 2>&1; then
+          nohup python3 "\$py_script" > "/var/log/ping_server_\$port.log" 2>&1 &
+          echo "[+] Started ping server on port \$port"
+        else
+          echo "[!] Port \$port already in use. Skipping server startup."
+        fi
+      done
+
+      for port in "\${port_array[@]}"; do
+        response=\$(curl -s --max-time 3 "http://localhost:\$port/ping")
         if [[ "\$response" != "pong" ]]; then
           echo "[FAIL] No valid HTTP response on port \$port"
           all_ok=false
@@ -80,12 +117,7 @@ while true; do
 
     ssh)
       ssh -q -o ConnectTimeout=5 -o BatchMode=yes "\$target_ip" exit
-      if [ \$? -ne 0 ]; then
-        echo "[FAIL] SSH connection failed to \$target_ip"
-        all_ok=false
-      else
-        echo "[OK] SSH tunnel is up"
-      fi
+      [ \$? -ne 0 ] && echo "[FAIL] SSH connection failed to \$target_ip" && all_ok=false || echo "[OK] SSH tunnel is up"
       ;;
 
     frp)
@@ -103,12 +135,7 @@ while true; do
 
     wireguard)
       ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1
-      if [ \$? -ne 0 ]; then
-        echo "[FAIL] WireGuard endpoint unreachable"
-        all_ok=false
-      else
-        echo "[OK] WireGuard tunnel reachable"
-      fi
+      [ \$? -ne 0 ] && echo "[FAIL] WireGuard endpoint unreachable" && all_ok=false || echo "[OK] WireGuard tunnel reachable"
       ;;
 
     *)

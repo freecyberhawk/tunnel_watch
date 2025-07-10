@@ -2,17 +2,17 @@
 
 # 🚇 Tunnel Watch
 
-**Tunnel Watch** is a lightweight and flexible tunnel/port monitoring tool for Linux. It watches local or remote ports (e.g., VPNs, SSH tunnels, reverse proxies) and **automatically restarts** a given `systemd` service if the tunnel fails multiple times in a row.
+**Tunnel Watch** is a lightweight and flexible tunnel/port monitoring tool for Linux. It watches local or remote ports (e.g., VPNs, SSH tunnels, reverse proxies) and `automatically restarts` a given `systemd` service if the tunnel fails multiple times in a row.
 
 ---
 
 ## 🔧 Features
 
-- 🔌 Monitor one or more **ports** (e.g., `443`, `8443`, `2053`)
-- 📡 Supports multiple **tunnel types**: `ping`, `http`, `ssh`, `frp`, `wireguard`
-- ♻️ Automatically **restarts a systemd service** if the connection fails
-- ⏱ Configurable **failure threshold** and **cooldown time**
-- 🧩 Fully **interactive installer**
+- 📡 Supports multiple `tunnel types`: `ping`, `http`, `ssh`, `frp`, `wireguard`
+- 🔌 Monitor one or more `ports` (e.g., `443`, `8443`, `2053`)
+- ♻️ Automatically `restarts a systemd service` if the connection fails
+- ⏱ Configurable `failure threshold` and `cooldown time`
+- 🧩 Fully `interactive installer`
 - 💻 Runs as a persistent, auto-restarting `systemd` service
 
 ---
@@ -27,9 +27,11 @@ bash <(curl -s https://raw.githubusercontent.com/freecyberhawk/tunnel_watch/main
 
 The installer will ask:
 
-1. Destination IP or domain (e.g., `1.2.3.4`)
-2. Comma-separated list of ports to monitor (e.g., `443,8443`)
-3. Type of tunnel to monitor: `ping`, `http`, `ssh`, `frp`, `wireguard`
+1. Tunnel type to monitor: `ping`, `http`, `ssh`, `frp`, `wireguard`
+2. Depending on the tunnel type:
+   - `ping`, `ssh`, `frp`, `wireguard`: enter the remote IP to check
+   - `http`: uses `127.0.0.1` and launches built-in Python servers automatically
+3. Comma-separated list of ports to monitor (not required for `ping`/`ssh`)
 4. The name of the `systemd` service to restart (e.g., `hawk-proxy`)
 5. Number of consecutive failures before restarting the service
 6. Number of seconds to wait after restarting before checking again
@@ -38,26 +40,26 @@ The installer will ask:
 
 ## ⚙️ Tunnel Types & Requirements
 
-| Tunnel Type | Purpose                       | Requirements on Remote (Target)                      | Requirements on Local (Monitor)           | Test Method              |
-| ----------- | ----------------------------- | ---------------------------------------------------- | ----------------------------------------- | ------------------------ |
-| `ping`      | Basic IP availability         | Responds to ICMP ping (enabled in firewall)          | `ping` installed                          | ICMP ping                |
-| `http`      | Web tunnel or proxy check     | HTTP server running with `/ping` that returns `pong` | `curl` installed                          | Check HTTP response      |
-| `ssh`       | SSH tunnel or port forwarding | SSH server running, key-based auth set up            | Private key in `~/.ssh/`, `ssh` installed | Run `ssh user@host exit` |
-| `frp`       | Reverse proxy tunnel like FRP | `frps` running, reverse port exposed                 | `nc` (netcat) installed                   | Port check with `nc`     |
-| `wireguard` | VPN tunnel with private IPs   | `wg` active, peer config valid                       | `ping`, WireGuard interface up            | Ping remote private IP   |
+| Tunnel Type | Purpose                       | Auto Target Address | Remote Requirements                 | Local Requirements          | Test Method            |
+| ----------- | ----------------------------- | ------------------- | ----------------------------------- | --------------------------- | ---------------------- |
+| `ping`      | Basic IP availability         | User-defined IP     | ICMP enabled in firewall            | `ping`                      | ICMP ping              |
+| `http`      | Web tunnel or proxy check     | `127.0.0.1`         | Nothing required                    | `curl`, auto-starts Python  | `/ping` → `pong`       |
+| `ssh`       | SSH tunnel or port forwarding | User-defined IP     | SSH server + key-based auth         | `ssh`, private key setup    | `ssh user@host exit`   |
+| `frp`       | Reverse proxy tunnel like FRP | User-defined IP     | `frps` running + reverse ports open | `nc` (netcat)               | Port check with `nc`   |
+| `wireguard` | VPN tunnel with private IPs   | User-defined IP     | `wg` configured + ICMP reachable    | `ping`, WireGuard interface | Ping remote private IP |
 
 ---
 
 ## 🛠 Dependencies
 
-Make sure these tools are installed on the **monitoring server**:
+Make sure these tools are installed on the `monitoring server`:
 
 - `bash`
 - `nc` (netcat)
 - `ping`
-- `curl` (for HTTP mode)
-- `ssh` (for SSH mode)
-- A systemd-based Linux system
+- `curl` (for `http` mode)
+- `ssh` (for `ssh` mode)
+- A `systemd`-based Linux system
 
 ### 📦 Install missing tools
 
@@ -65,56 +67,6 @@ Make sure these tools are installed on the **monitoring server**:
 sudo apt update
 sudo apt install netcat curl openssh-client iputils-ping
 ```
-
----
-
-## 🌐 Example
-
-To monitor an SSH tunnel to `10.0.0.2` on port `2222`, and restart the service `my-ssh-tunnel` after 3 failures:
-
-```bash
-bash <(curl -s https://raw.githubusercontent.com/freecyberhawk/tunnel_watch/main/install.sh)
-```
-
-Example answers to prompts:
-
-```
-Destination IP: 10.0.0.2
-Ports to monitor: 2222
-Tunnel type: ssh
-Systemd service to restart: my-ssh-tunnel
-Failures before restart: 3
-Cooldown time: 10
-```
-
----
-
-## 💡 Advanced Tips
-
-- For `http`, you can create a simple `ping_server.py` file on your server:
-
-```python
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-class PingHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/ping':
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"pong")
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-if __name__ == '__main__':
-    server_address = ('0.0.0.0', 8080)  # you can change the port
-    httpd = HTTPServer(server_address, PingHandler)
-    print("🟢 HTTP Ping Server running on port 8080")
-    httpd.serve_forever()
-```
-
-- For `ssh`, ensure your public key is added to the remote server's `~/.ssh/authorized_keys`.
-- For `wireguard`, make sure the remote peer responds to ping over the VPN interface (e.g., `10.66.66.1`).
 
 ---
 
