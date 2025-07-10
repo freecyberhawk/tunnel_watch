@@ -143,26 +143,26 @@ while true; do
       ;;
 
     http)
-      for port in "${port_array[@]}"; do
-        response=$(curl -s -o /dev/null -w "%{http_code}" "http://$target_ip:$port/ping")
+      declare -A fail_counters
+      for port in "\${port_array[@]}"; do
+        response=\$(curl -s -o /dev/null -w "%{http_code}" "http://\$target_ip:\$port/ping")
 
-        if [[ "$response" == "200" ]]; then
-          echo "[OK] Tunnel to $target_ip:$port is UP" | tee -a "$monitor_log"
-          fail_counters["$port"]=0
+        if [[ "\$response" == "200" ]]; then
+          echo "[OK] Tunnel to \$target_ip:\$port is UP" | tee -a "$monitor_log"
+          fail_counters["\$port"]=0
         else
-          echo "[FAIL] HTTP check failed on port $port (status code: $response)" | tee -a "$monitor_log"
-          fail_counters["$port"]=$(( ${fail_counters["$port"]:-0} + 1 ))
-          echo "❌ Port $port failure count: ${fail_counters["$port"]}/$fail_limit" | tee -a "$monitor_log"
+          echo "[FAIL] HTTP check failed on port \$port (status code: \$response)" | tee -a "$monitor_log"
+          fail_counters["\$port"]=\$(( \${fail_counters["\$port"]:-0} + 1 ))
+          echo "❌ Port \$port failure count: \${fail_counters["\$port"]}/$fail_limit" | tee -a "$monitor_log"
 
-          if [[ ${fail_counters["$port"]} -ge $fail_limit ]]; then
-            echo "🔁 Restarting service: $service_name due to 3 consecutive failures on port $port" | tee -a "$monitor_log"
-            systemctl restart "$service_name"
+          if [[ \${fail_counters["\$port"]} -ge $fail_limit ]]; then
+            echo "🔁 Restarting service: \$service_name due to 3 consecutive failures on port \$port" | tee -a "$monitor_log"
+            systemctl restart "\$service_name"
             echo "⏳ Waiting $cooldown seconds after restart..." | tee -a "$monitor_log"
             sleep "$cooldown"
 
-            # Reset all counters after restart
-            for p in "${port_array[@]}"; do
-              fail_counters["$p"]=0
+            for p in "\${port_array[@]}"; do
+              fail_counters["\$p"]=0
             done
             break
           fi
