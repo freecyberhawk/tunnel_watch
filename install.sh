@@ -70,60 +70,15 @@ while true; do
 
     http)
       for port in "${port_array[@]}"; do
-        if ! lsof -i :$port >/dev/null 2>&1; then
-          py_script="/usr/local/bin/ping_server_$port.py"
-          cat <<PYEOF > "\$py_script"
-from http.server import BaseHTTPRequestHandler, HTTPServer
+        url="http://$target_ip:$port/ping"
+        response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$url")
 
-class PingHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == '/ping':
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"pong")
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def log_message(self, format, *args):
-        return
-
-if __name__ == '__main__':
-    server_address = ('0.0.0.0', $port)
-    httpd = HTTPServer(server_address, PingHandler)
-    print(f"🟢 Ping server running on port {server_address[1]}")
-    httpd.serve_forever()
-PYEOF
-
-          chmod +x "\$py_script"
-          nohup python3 "\$py_script" > "/var/log/ping_server_$port.log" 2>&1 &
-          echo "[+] Started ping server on port $port"
-        else
-          echo "[!] Port $port already in use. Skipping server startup."
-        fi
-      done
-
-      for port in "${port_array[@]}"; do
-        response=$(curl -s --max-time 3 "http://localhost:$port/ping")
-        if [[ "$response" != "pong" ]]; then
-          echo "[FAIL] No valid HTTP response on port $port"
+        if [[ "$response" != "200" ]]; then
+          echo "[FAIL] HTTP check failed on $url (status code: $response)"
           all_ok=false
           break
         else
-          echo "[OK] HTTP pong received from port $port"
-        fi
-      done
-      ;;
-
-    frp)
-      for port in "\${port_array[@]}"; do
-        nc -z -w 2 "\$target_ip" "\$port"
-        if [ \$? -ne 0 ]; then
-          echo "[FAIL] FRP port \$port unreachable"
-          all_ok=false
-          break
-        else
-          echo "[OK] FRP port \$port reachable"
+          echo "[OK] HTTP service responded 200 on $url"
         fi
       done
       ;;
