@@ -1,5 +1,10 @@
 #!/bin/bash
 
+if [[ $EUID -ne 0 ]]; then
+  echo "❌ This script must be run as root."
+  exit 1
+fi
+
 echo -e "\033[1;36m"
 cat << "EOF"
  _____                       _  __        __    _       _
@@ -7,11 +12,20 @@ cat << "EOF"
   | || | | | '_ \| '_ \ / _ \ |  \ \ /\ / / _` | __/ __| '_ \
   | || |_| | | | | | | |  __/ |   \ V  V / (_| | || (__| | | |
   |_| \__,_|_| |_|_| |_|\___|_|    \_/\_/ \__,_|\__\___|_| |_|
+
 EOF
 echo -e "          github.com/\033[4mfreecyberhawk\033[0m"
 echo -e "\033[0m"
 
 set -e
+
+# Check dependencies
+for cmd in lsof curl python3 systemctl; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "❌ Required command '$cmd' not found. Please install it before running this script."
+    exit 1
+  fi
+done
 
 echo "Setting up Tunnel Monitor..."
 
@@ -19,7 +33,7 @@ get_input() {
   local prompt="$1"
   local var
   while true; do
-    read -p "$prompt" var
+    read -rp "$prompt" var
     if [[ -n "$var" ]]; then
       echo "$var"
       return
@@ -29,9 +43,17 @@ get_input() {
   done
 }
 
-tunnel_type=$(get_input "Enter tunnel type (ping, http, ssh, frp, wireguard): ")
+valid_tunnel_types=("ping" "http" "wireguard")
 
-# Defaults for http tunnel type
+while true; do
+  tunnel_type=$(get_input "Enter tunnel type (ping, http, wireguard): ")
+  if [[ " ${valid_tunnel_types[*]} " == *" $tunnel_type "* ]]; then
+    break
+  else
+    echo "⚠️ Invalid tunnel type. Choose one of: ping, http, wireguard."
+  fi
+done
+
 if [[ "$tunnel_type" == "http" ]]; then
   target_ip="127.0.0.1"
   echo "Using default target IP for HTTP: $target_ip"
@@ -45,19 +67,70 @@ fail_limit=$(get_input "Enter the number of consecutive failures to trigger rest
 cooldown=$(get_input "Enter seconds to wait after restart before checking again: ")
 
 monitor_script_path="/usr/local/bin/tunnel-monitor.sh"
+ping_server_port=9999
+ping_server_script="/usr/local/bin/ping_server_$ping_server_port.py"
+ping_server_log="/var/log/ping_server_$ping_server_port.log"
+monitor_log="/var/log/tunnel-monitor.log"
+
 cat <<EOF > "$monitor_script_path"
 #!/bin/bash
+
 target_ip="$target_ip"
 ports="$ports"
 tunnel_type="$tunnel_type"
 service_name="$service_name"
 fail_limit=$fail_limit
 cooldown=$cooldown
+ping_server_port=$ping_server_port
 
 IFS=',' read -ra port_array <<< "\$ports"
 fail_counter=0
 
-echo "🟢 Tunnel Monitor started for \$target_ip using tunnel type: \$tunnel_type"
+echo "🟢 Tunnel Monitor started for \$target_ip using tunnel type: \$tunnel_type" | tee -a "$monitor_log"
+
+# Function to start HTTP ping server if needed
+start_ping_server() {
+  if ! lsof -i :\$ping_server_port >/dev/null 2>&1; then
+    echo "[+] Starting local ping server on port \$ping_server_port" | tee -a "$monitor_log"
+    nohup python3 "$ping_server_script" >> "$ping_server_log" 2>&1 &
+    sleep 1
+  else
+    echo "[!] Ping server already running on port \$ping_server_port" | tee -a "$monitor_log"
+  fi
+}
+
+# For http tunnel type, ensure ping server script exists and server running
+if [[ "\$tunnel_type" == "http" ]]; then
+  if [ ! -f "$ping_server_script" ]; then
+    cat <<PYEOF > "$ping_server_script"
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/ping':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"pong")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+if __name__ == '__main__':
+    server_address = ('127.0.0.1', $ping_server_port)
+    httpd = HTTPServer(server_address, PingHandler)
+    print(f"🟢 Ping server running on port {server_address[1]}", flush=True)
+    httpd.serve_forever()
+PYEOF
+    chmod +x "$ping_server_script"
+  fi
+
+  start_ping_server
+fi
+
+set +e
 
 while true; do
   all_ok=true
@@ -65,70 +138,39 @@ while true; do
   case "\$tunnel_type" in
     ping)
       ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1
-      [ \$? -ne 0 ] && echo "[FAIL] Ping failed for \$target_ip" && all_ok=false || echo "[OK] Ping successful"
+      if [ \$? -ne 0 ]; then
+        echo "[FAIL] Ping failed for \$target_ip" | tee -a "$monitor_log"
+        all_ok=false
+      else
+        echo "[OK] Ping successful" | tee -a "$monitor_log"
+      fi
       ;;
 
     http)
-      monitor_port=9999
-      py_script="/usr/local/bin/ping_server_$monitor_port.py"
-
-      # Create ping server script if not already exists
-      if [ ! -f "$py_script" ]; then
-        cat <<PYEOF > "$py_script"
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-
-    class PingHandler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            if self.path == '/ping':
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b"pong")
-            else:
-                self.send_response(404)
-                self.end_headers()
-
-        def log_message(self, format, *args):
-            return
-
-    if __name__ == '__main__':
-        server_address = ('127.0.0.1', $monitor_port)
-        httpd = HTTPServer(server_address, PingHandler)
-        print(f"🟢 Ping server running on port {server_address[1]}")
-        httpd.serve_forever()
-    PYEOF
-
-        chmod +x "$py_script"
-      fi
-
-      # Start server only if port not already in use
-      if ! lsof -i :$monitor_port >/dev/null 2>&1; then
-        nohup python3 "$py_script" > "/var/log/ping_server_$monitor_port.log" 2>&1 &
-        echo "[+] Started local ping server on port $monitor_port"
-      else
-        echo "[!] Port $monitor_port already in use. Assuming ping server is running."
-      fi
-
-      # Now check the tunnel by requesting /ping on each target port
-      for port in "${port_array[@]}"; do
-        response=$(curl -s -o /dev/null -w "%{http_code}" "http://$target_ip:$port/ping")
-        if [[ "$response" != "200" ]]; then
-          echo "[FAIL] HTTP check failed on port $port (status code: $response)"
+      for port in "\${port_array[@]}"; do
+        response=\$(curl -s -o /dev/null -w "%{http_code}" "http://\$target_ip:\$port/ping")
+        if [[ "\$response" != "200" ]]; then
+          echo "[FAIL] HTTP check failed on port \$port (status code: \$response)" | tee -a "$monitor_log"
           all_ok=false
           break
         else
-          echo "[OK] HTTP pong received from $target_ip:$port"
+          echo "[OK] HTTP pong received from \$target_ip:\$port" | tee -a "$monitor_log"
         fi
       done
       ;;
 
-
     wireguard)
       ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1
-      [ \$? -ne 0 ] && echo "[FAIL] WireGuard endpoint unreachable" && all_ok=false || echo "[OK] WireGuard tunnel reachable"
+      if [ \$? -ne 0 ]; then
+        echo "[FAIL] WireGuard endpoint unreachable" | tee -a "$monitor_log"
+        all_ok=false
+      else
+        echo "[OK] WireGuard tunnel reachable" | tee -a "$monitor_log"
+      fi
       ;;
 
     *)
-      echo "❌ Unsupported tunnel type: \$tunnel_type"
+      echo "❌ Unsupported tunnel type: \$tunnel_type" | tee -a "$monitor_log"
       exit 1
       ;;
   esac
@@ -137,13 +179,13 @@ while true; do
     fail_counter=0
   else
     ((fail_counter++))
-    echo "❌ Failure count: \$fail_counter/\$fail_limit"
+    echo "❌ Failure count: \$fail_counter/\$fail_limit" | tee -a "$monitor_log"
   fi
 
   if [ "\$fail_counter" -ge "\$fail_limit" ]; then
-    echo "🔁 Restarting service: \$service_name"
+    echo "🔁 Restarting service: \$service_name" | tee -a "$monitor_log"
     systemctl restart "\$service_name"
-    echo "⏳ Waiting \$cooldown seconds after restart..."
+    echo "⏳ Waiting \$cooldown seconds after restart..." | tee -a "$monitor_log"
     sleep "\$cooldown"
     fail_counter=0
   else
@@ -163,12 +205,15 @@ After=network.target
 [Service]
 ExecStart=$monitor_script_path
 Restart=always
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=tunnel-monitor
+User=root
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reexec
 systemctl daemon-reload
 systemctl enable tunnel-monitor.service
 systemctl restart tunnel-monitor.service
