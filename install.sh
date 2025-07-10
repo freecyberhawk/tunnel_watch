@@ -98,14 +98,13 @@ start_ping_server() {
   fi
 }
 
-if [[ "\$tunnel_type" == "http" ]]; then
+if [[ "$tunnel_type" == "http" ]]; then
   if [ ! -f "$ping_server_script" ]; then
-    cat <<PYEOF > "$ping_server_script"
-from http.server import BaseHTTPRequestHandler, HTTPServer
+    echo 'from http.server import BaseHTTPRequestHandler, HTTPServer
 
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == '/ping':
+        if self.path == "/ping":
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"pong")
@@ -116,12 +115,12 @@ class PingHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-if __name__ == '__main__':
-    server_address = ('127.0.0.1', $ping_server_port)
+if __name__ == "__main__":
+    server_address = ("127.0.0.1", '"$ping_server_port"')
     httpd = HTTPServer(server_address, PingHandler)
     print(f"🟢 Ping server running on port {server_address[1]}", flush=True)
-    httpd.serve_forever()
-PYEOF
+    httpd.serve_forever()' > "$ping_server_script"
+
     chmod +x "$ping_server_script"
   fi
   start_ping_server
