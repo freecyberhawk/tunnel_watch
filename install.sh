@@ -83,7 +83,7 @@ fail_limit=$fail_limit
 cooldown=$cooldown
 ping_server_port=$ping_server_port
 
-IFS=',' read -ra port_array <<< "\$ports"
+IFS=',' read -ra port_array <<< "$ports"
 fail_counter=0
 
 echo "🟢 Tunnel Monitor started for \$target_ip using tunnel type: \$tunnel_type" | tee -a "$monitor_log"
