@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 echo -e "\033[1;36m"
 cat << "EOF"
  _____                       _  __        __    _       _
@@ -16,7 +15,6 @@ set -e
 
 echo "Setting up Tunnel Monitor..."
 
-# Prompt with validation
 get_input() {
   local prompt="$1"
   local var
@@ -33,16 +31,17 @@ get_input() {
 
 target_ip=$(get_input "Enter the destination IP to check tunnel (e.g. 1.2.3.4): ")
 ports=$(get_input "Enter comma-separated ports to monitor (e.g. 443,8443): ")
+tunnel_type=$(get_input "Enter tunnel type (ping, http, ssh, frp, wireguard): ")
 service_name=$(get_input "Enter the systemd service name to restart: ")
 fail_limit=$(get_input "Enter the number of consecutive failures to trigger restart: ")
 cooldown=$(get_input "Enter seconds to wait after restart before checking again: ")
 
-# Save the monitor script
 monitor_script_path="/usr/local/bin/tunnel-monitor.sh"
 cat <<EOF > "$monitor_script_path"
 #!/bin/bash
 target_ip="$target_ip"
 ports="$ports"
+tunnel_type="$tunnel_type"
 service_name="$service_name"
 fail_limit=$fail_limit
 cooldown=$cooldown
@@ -50,20 +49,73 @@ cooldown=$cooldown
 IFS=',' read -ra port_array <<< "\$ports"
 fail_counter=0
 
-echo "🟢 Tunnel Monitor started for \$target_ip ports: \$ports"
+echo "🟢 Tunnel Monitor started for \$target_ip using tunnel type: \$tunnel_type"
 
 while true; do
   all_ok=true
-  for port in "\${port_array[@]}"; do
-    nc -z -w 3 "\$target_ip" "\$port" >/dev/null 2>&1
-    if [ \$? -ne 0 ]; then
-      echo "[FAIL] Port \$port on \$target_ip is unreachable"
-      all_ok=false
-      break
-    else
-      echo "[OK] Port \$port on \$target_ip is reachable"
-    fi
-  done
+
+  case "\$tunnel_type" in
+    ping)
+      ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1
+      if [ \$? -ne 0 ]; then
+        echo "[FAIL] Ping failed for \$target_ip"
+        all_ok=false
+      else
+        echo "[OK] Ping successful"
+      fi
+      ;;
+
+    http)
+      for port in "\${port_array[@]}"; do
+        response=\$(curl -s --max-time 3 "http://\$target_ip:\$port/ping.php")
+        if [[ "\$response" != "pong" ]]; then
+          echo "[FAIL] No valid HTTP response on port \$port"
+          all_ok=false
+          break
+        else
+          echo "[OK] HTTP pong received from port \$port"
+        fi
+      done
+      ;;
+
+    ssh)
+      ssh -q -o ConnectTimeout=5 -o BatchMode=yes "\$target_ip" exit
+      if [ \$? -ne 0 ]; then
+        echo "[FAIL] SSH connection failed to \$target_ip"
+        all_ok=false
+      else
+        echo "[OK] SSH tunnel is up"
+      fi
+      ;;
+
+    frp)
+      for port in "\${port_array[@]}"; do
+        nc -z -w 2 "\$target_ip" "\$port"
+        if [ \$? -ne 0 ]; then
+          echo "[FAIL] FRP port \$port unreachable"
+          all_ok=false
+          break
+        else
+          echo "[OK] FRP port \$port reachable"
+        fi
+      done
+      ;;
+
+    wireguard)
+      ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1
+      if [ \$? -ne 0 ]; then
+        echo "[FAIL] WireGuard endpoint unreachable"
+        all_ok=false
+      else
+        echo "[OK] WireGuard tunnel reachable"
+      fi
+      ;;
+
+    *)
+      echo "❌ Unsupported tunnel type: \$tunnel_type"
+      exit 1
+      ;;
+  esac
 
   if [ "\$all_ok" = true ]; then
     fail_counter=0
@@ -86,7 +138,6 @@ EOF
 
 chmod +x "$monitor_script_path"
 
-# Create systemd service
 service_file="/etc/systemd/system/tunnel-monitor.service"
 cat <<EOF > "$service_file"
 [Unit]
@@ -101,7 +152,6 @@ Restart=always
 WantedBy=multi-user.target
 EOF
 
-# Enable and start the service
 systemctl daemon-reexec
 systemctl daemon-reload
 systemctl enable tunnel-monitor.service
