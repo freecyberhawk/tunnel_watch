@@ -143,27 +143,31 @@ while true; do
       ;;
 
     http)
-      any_port_ok=false
-      for port in "\${port_array[@]}"; do
-        response=\$(curl -s -o /dev/null -w "%{http_code}" "http://\$target_ip:\$port/ping")
-        if [[ "\$response" == "200" ]]; then
-          echo "[OK] Tunnel to \$target_ip:\$port is UP" | tee -a "$monitor_log"
-          any_port_ok=true
-          break
+      for port in "${port_array[@]}"; do
+        response=$(curl -s -o /dev/null -w "%{http_code}" "http://$target_ip:$port/ping")
+
+        if [[ "$response" == "200" ]]; then
+          echo "[OK] Tunnel to $target_ip:$port is UP" | tee -a "$monitor_log"
+          fail_counters["$port"]=0
         else
-          echo "[FAIL] HTTP check failed on port \$port (status code: \$response)" | tee -a "$monitor_log"
+          echo "[FAIL] HTTP check failed on port $port (status code: $response)" | tee -a "$monitor_log"
+          fail_counters["$port"]=$(( ${fail_counters["$port"]:-0} + 1 ))
+          echo "❌ Port $port failure count: ${fail_counters["$port"]}/$fail_limit" | tee -a "$monitor_log"
+
+          if [[ ${fail_counters["$port"]} -ge $fail_limit ]]; then
+            echo "🔁 Restarting service: $service_name due to 3 consecutive failures on port $port" | tee -a "$monitor_log"
+            systemctl restart "$service_name"
+            echo "⏳ Waiting $cooldown seconds after restart..." | tee -a "$monitor_log"
+            sleep "$cooldown"
+
+            # Reset all counters after restart
+            for p in "${port_array[@]}"; do
+              fail_counters["$p"]=0
+            done
+            break
+          fi
         fi
       done
-
-      if [[ "\$any_port_ok" == true ]]; then
-        echo "[✓] At least one port responded OK" | tee -a "$monitor_log"
-        echo "[OK] HTTP tunnel healthy" | tee -a "$monitor_log"
-        fail_counter=0
-      else
-        echo "[✗] All ports failed" | tee -a "$monitor_log"
-        ((fail_counter++))
-        echo "❌ Failure count: \$fail_counter/\$fail_limit" | tee -a "$monitor_log"
-      fi
       ;;
 
     wireguard)
