@@ -69,9 +69,10 @@ while true; do
       ;;
 
     http)
-      for port in "\${port_array[@]}"; do
-        py_script="/usr/local/bin/ping_server_\$port.py"
-        cat <<PYEOF > "\$py_script"
+      for port in "${port_array[@]}"; do
+        if ! lsof -i :$port >/dev/null 2>&1; then
+          py_script="/usr/local/bin/ping_server_$port.py"
+          cat <<PYEOF > "\$py_script"
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 class PingHandler(BaseHTTPRequestHandler):
@@ -94,30 +95,24 @@ if __name__ == '__main__':
     httpd.serve_forever()
 PYEOF
 
-        chmod +x "\$py_script"
-        if ! lsof -i :\$port >/dev/null 2>&1; then
-          nohup python3 "\$py_script" > "/var/log/ping_server_\$port.log" 2>&1 &
-          echo "[+] Started ping server on port \$port"
+          chmod +x "\$py_script"
+          nohup python3 "\$py_script" > "/var/log/ping_server_$port.log" 2>&1 &
+          echo "[+] Started ping server on port $port"
         else
-          echo "[!] Port \$port already in use. Skipping server startup."
+          echo "[!] Port $port already in use. Skipping server startup."
         fi
       done
 
-      for port in "\${port_array[@]}"; do
-        response=\$(curl -s --max-time 3 "http://localhost:\$port/ping")
-        if [[ "\$response" != "pong" ]]; then
-          echo "[FAIL] No valid HTTP response on port \$port"
+      for port in "${port_array[@]}"; do
+        response=$(curl -s --max-time 3 "http://localhost:$port/ping")
+        if [[ "$response" != "pong" ]]; then
+          echo "[FAIL] No valid HTTP response on port $port"
           all_ok=false
           break
         else
-          echo "[OK] HTTP pong received from port \$port"
+          echo "[OK] HTTP pong received from port $port"
         fi
       done
-      ;;
-
-    ssh)
-      ssh -q -o ConnectTimeout=5 -o BatchMode=yes "\$target_ip" exit
-      [ \$? -ne 0 ] && echo "[FAIL] SSH connection failed to \$target_ip" && all_ok=false || echo "[OK] SSH tunnel is up"
       ;;
 
     frp)
