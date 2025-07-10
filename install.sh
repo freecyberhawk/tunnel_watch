@@ -88,7 +88,6 @@ fail_counter=0
 
 echo "🟢 Tunnel Monitor started for \$target_ip using tunnel type: \$tunnel_type" | tee -a "$monitor_log"
 
-# Function to start HTTP ping server if needed
 start_ping_server() {
   if ! lsof -i :\$ping_server_port >/dev/null 2>&1; then
     echo "[+] Starting local ping server on port \$ping_server_port" | tee -a "$monitor_log"
@@ -99,7 +98,6 @@ start_ping_server() {
   fi
 }
 
-# For http tunnel type, ensure ping server script exists and server running
 if [[ "\$tunnel_type" == "http" ]]; then
   if [ ! -f "$ping_server_script" ]; then
     cat <<PYEOF > "$ping_server_script"
@@ -126,23 +124,21 @@ if __name__ == '__main__':
 PYEOF
     chmod +x "$ping_server_script"
   fi
-
   start_ping_server
 fi
 
 set +e
 
 while true; do
-  all_ok=true
-
   case "\$tunnel_type" in
     ping)
-      ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1
-      if [ \$? -ne 0 ]; then
-        echo "[FAIL] Ping failed for \$target_ip" | tee -a "$monitor_log"
-        all_ok=false
-      else
+      if ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1; then
         echo "[OK] Ping successful" | tee -a "$monitor_log"
+        fail_counter=0
+      else
+        echo "[FAIL] Ping failed for \$target_ip" | tee -a "$monitor_log"
+        ((fail_counter++))
+        echo "❌ Failure count: \$fail_counter/\$fail_limit" | tee -a "$monitor_log"
       fi
       ;;
 
@@ -153,25 +149,31 @@ while true; do
         if [[ "\$response" == "200" ]]; then
           echo "[OK] Tunnel to \$target_ip:\$port is UP" | tee -a "$monitor_log"
           any_port_ok=true
+          break
         else
           echo "[FAIL] HTTP check failed on port \$port (status code: \$response)" | tee -a "$monitor_log"
         fi
       done
 
       if [[ "\$any_port_ok" == true ]]; then
-        all_ok=true
+        echo "[✓] At least one port responded OK" | tee -a "$monitor_log"
+        echo "[OK] HTTP tunnel healthy" | tee -a "$monitor_log"
+        fail_counter=0
       else
-        all_ok=false
+        echo "[✗] All ports failed" | tee -a "$monitor_log"
+        ((fail_counter++))
+        echo "❌ Failure count: \$fail_counter/\$fail_limit" | tee -a "$monitor_log"
       fi
       ;;
 
     wireguard)
-      ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1
-      if [ \$? -ne 0 ]; then
-        echo "[FAIL] WireGuard endpoint unreachable" | tee -a "$monitor_log"
-        all_ok=false
-      else
+      if ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1; then
         echo "[OK] WireGuard tunnel reachable" | tee -a "$monitor_log"
+        fail_counter=0
+      else
+        echo "[FAIL] WireGuard endpoint unreachable" | tee -a "$monitor_log"
+        ((fail_counter++))
+        echo "❌ Failure count: \$fail_counter/\$fail_limit" | tee -a "$monitor_log"
       fi
       ;;
 
@@ -180,13 +182,6 @@ while true; do
       exit 1
       ;;
   esac
-
-  if [ "\$all_ok" = true ]; then
-    fail_counter=0
-  else
-    ((fail_counter++))
-    echo "❌ Failure count: \$fail_counter/\$fail_limit" | tee -a "$monitor_log"
-  fi
 
   if [ "\$fail_counter" -ge "\$fail_limit" ]; then
     echo "🔁 Restarting service: \$service_name" | tee -a "$monitor_log"
