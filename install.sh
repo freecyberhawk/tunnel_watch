@@ -69,19 +69,58 @@ while true; do
       ;;
 
     http)
-      for port in "${port_array[@]}"; do
-        url="http://$target_ip:$port/ping"
-        response=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$url")
+      monitor_port=9999
+      py_script="/usr/local/bin/ping_server_$monitor_port.py"
 
+      # Create ping server script if not already exists
+      if [ ! -f "$py_script" ]; then
+        cat <<PYEOF > "$py_script"
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class PingHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == '/ping':
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"pong")
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format, *args):
+            return
+
+    if __name__ == '__main__':
+        server_address = ('127.0.0.1', $monitor_port)
+        httpd = HTTPServer(server_address, PingHandler)
+        print(f"🟢 Ping server running on port {server_address[1]}")
+        httpd.serve_forever()
+    PYEOF
+
+        chmod +x "$py_script"
+      fi
+
+      # Start server only if port not already in use
+      if ! lsof -i :$monitor_port >/dev/null 2>&1; then
+        nohup python3 "$py_script" > "/var/log/ping_server_$monitor_port.log" 2>&1 &
+        echo "[+] Started local ping server on port $monitor_port"
+      else
+        echo "[!] Port $monitor_port already in use. Assuming ping server is running."
+      fi
+
+      # Now check the tunnel by requesting /ping on each target port
+      for port in "${port_array[@]}"; do
+        response=$(curl -s -o /dev/null -w "%{http_code}" "http://$target_ip:$port/ping")
         if [[ "$response" != "200" ]]; then
-          echo "[FAIL] HTTP check failed on $url (status code: $response)"
+          echo "[FAIL] HTTP check failed on port $port (status code: $response)"
           all_ok=false
           break
         else
-          echo "[OK] HTTP service responded 200 on $url"
+          echo "[OK] HTTP pong received from $target_ip:$port"
         fi
       done
       ;;
+
 
     wireguard)
       ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1
