@@ -147,16 +147,22 @@ while true; do
       ;;
 
     http)
-      for port in "\${port_array[@]}"; do
-        response=\$(curl -s -o /dev/null -w "%{http_code}" "http://\$target_ip:\$port/ping")
-        if [[ "\$response" != "200" ]]; then
-          echo "[FAIL] HTTP check failed on port \$port (status code: \$response)" | tee -a "$monitor_log"
-          all_ok=false
-          break
+      local any_port_ok=false
+      for port in "${port_array[@]}"; do
+        response=$(curl -s -o /dev/null -w "%{http_code}" "http://$target_ip:$port/ping")
+        if [[ "$response" == "200" ]]; then
+          echo "[OK] Tunnel to $target_ip:$port is UP" | tee -a "$monitor_log"
+          any_port_ok=true
         else
-          echo "[OK] HTTP pong received from \$target_ip:\$port" | tee -a "$monitor_log"
+          echo "[FAIL] HTTP check failed on port $port (status code: $response)" | tee -a "$monitor_log"
         fi
       done
+
+      if [ "$any_port_ok" = true ]; then
+        all_ok=true
+      else
+        all_ok=false
+      fi
       ;;
 
     wireguard)
