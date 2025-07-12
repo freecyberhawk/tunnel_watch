@@ -156,8 +156,11 @@ while true; do
         response=$(curl -s -o /dev/null -w "%{http_code}" "http://$target_ip:$port/ping")
 
         if [[ "$response" == "200" ]]; then
-          echo "[OK] Tunnel to $target_ip:$port is UP" | tee -a "$log_file"
+          if [[ ${fail_counters["$port"]:-0} -ne 0 ]]; then
+            echo "[RECOVERY] $target_ip:$port is back UP. Resetting failure count." | tee -a "$log_file"
+          fi
           fail_counters["$port"]=0
+          echo "[OK] Tunnel to $target_ip:$port is UP" | tee -a "$log_file"
         else
           fail_counters["$port"]=$(( ${fail_counters["$port"]:-0} + 1 ))
           echo "[FAIL] HTTP check failed on $target_ip:$port (status $response)" | tee -a "$log_file"
