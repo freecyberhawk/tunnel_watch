@@ -161,17 +161,14 @@ while true; do
         else
           fail_counters["$port"]=$(( ${fail_counters["$port"]:-0} + 1 ))
           echo "[FAIL] HTTP check failed on $target_ip:$port (status $response)" | tee -a "$log_file"
-          echo "❌ Port $port failure count: ${fail_counters["$port"]}/$fail_limit" | tee -a "$log_file"
+          echo "❌ Port $port consecutive failure count: ${fail_counters["$port"]}/$fail_limit" | tee -a "$log_file"
 
           if [[ ${fail_counters["$port"]} -ge $fail_limit ]]; then
-            echo "🔁 Restarting service: $service_name due to failures on port $port" | tee -a "$log_file"
+            echo "🔁 Restarting service: $service_name due to $fail_limit consecutive failures on port $port" | tee -a "$log_file"
             systemctl restart "$service_name"
             echo "⏳ Waiting $cooldown seconds after restart..." | tee -a "$log_file"
             sleep "$cooldown"
-            for p in "${port_array[@]}"; do
-              fail_counters["$p"]=0
-            done
-            break
+            fail_counters["$port"]=0
           fi
         fi
       done
@@ -181,7 +178,7 @@ while true; do
 done
 EOF
 
-# جایگزینی مقادیر در فایل مانیتورینگ
+# Replacing placeholders in the monitoring script
 sed -i "s|{{TARGET_IP}}|$target_ip|g" "$monitor_script_path"
 sed -i "s|{{PORTS}}|$ports|g" "$monitor_script_path"
 sed -i "s|{{TUNNEL_TYPE}}|$tunnel_type|g" "$monitor_script_path"
