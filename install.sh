@@ -14,8 +14,7 @@ cat << "EOF"
   |_| \__,_|_| |_|_| |_|\___|_|    \_/\_/ \__,_|\__\___|_| |_|
 
 EOF
-echo -e "          github.com/\033[4mfreecyberhawk\033[0m"
-echo -e "\033[0m"
+echo -e "          github.com/\033[4mfreecyberhawk\033[0m\033[0m"
 
 set -e
 
@@ -44,7 +43,6 @@ get_input() {
 }
 
 valid_tunnel_types=("ping" "http" "wireguard")
-
 while true; do
   tunnel_type=$(get_input "Enter tunnel type (ping, http, wireguard): ")
   if [[ " ${valid_tunnel_types[*]} " == *" $tunnel_type "* ]]; then
@@ -72,39 +70,44 @@ ping_server_script="/usr/local/bin/ping_server_$ping_server_port.py"
 ping_server_log="/var/log/ping_server_$ping_server_port.log"
 monitor_log="/var/log/tunnel-monitor.log"
 
-cat <<EOF > "$monitor_script_path"
+cat << 'EOF' > "$monitor_script_path"
 #!/bin/bash
 
-target_ip="$target_ip"
-ports="$ports"
-tunnel_type="$tunnel_type"
-service_name="$service_name"
-fail_limit=$fail_limit
-cooldown=$cooldown
-ping_server_port=$ping_server_port
+target_ip="{{TARGET_IP}}"
+ports="{{PORTS}}"
+tunnel_type="{{TUNNEL_TYPE}}"
+service_name="{{SERVICE_NAME}}"
+fail_limit={{FAIL_LIMIT}}
+cooldown={{COOLDOWN}}
+ping_server_port={{PING_SERVER_PORT}}
 
 IFS=',' read -ra port_array <<< "$ports"
 fail_counter=0
 
-echo "🟢 Tunnel Monitor started for \$target_ip using tunnel type: \$tunnel_type" | tee -a "$monitor_log"
+log_file="{{MONITOR_LOG}}"
+mkdir -p "$(dirname "$log_file")"
+touch "$log_file"
+
+echo "🟢 Tunnel Monitor started for $target_ip using tunnel type: $tunnel_type" | tee -a "$log_file"
 
 start_ping_server() {
-  if ! lsof -i :\$ping_server_port >/dev/null 2>&1; then
-    echo "[+] Starting local ping server on port \$ping_server_port" | tee -a "$monitor_log"
-    nohup python3 "$ping_server_script" >> "$ping_server_log" 2>&1 &
+  if ! lsof -i :$ping_server_port >/dev/null 2>&1; then
+    echo "[+] Starting local ping server on port $ping_server_port" | tee -a "$log_file"
+    nohup python3 "{{PING_SERVER_SCRIPT}}" >> "{{PING_SERVER_LOG}}" 2>&1 &
     sleep 1
   else
-    echo "[!] Ping server already running on port \$ping_server_port" | tee -a "$monitor_log"
+    echo "[!] Ping server already running on port $ping_server_port" | tee -a "$log_file"
   fi
 }
 
 if [[ "$tunnel_type" == "http" ]]; then
-  if [ ! -f "$ping_server_script" ]; then
-    echo 'from http.server import BaseHTTPRequestHandler, HTTPServer
+  if [ ! -f "{{PING_SERVER_SCRIPT}}" ]; then
+cat <<PYEOF > "{{PING_SERVER_SCRIPT}}"
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/ping":
+        if self.path == '/ping':
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"pong")
@@ -115,97 +118,85 @@ class PingHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-if __name__ == "__main__":
-    server_address = ("127.0.0.1", '"$ping_server_port"')
+if __name__ == '__main__':
+    server_address = ('127.0.0.1', $ping_server_port)
     httpd = HTTPServer(server_address, PingHandler)
     print(f"🟢 Ping server running on port {server_address[1]}", flush=True)
-    httpd.serve_forever()' > "$ping_server_script"
-
-    chmod +x "$ping_server_script"
+    httpd.serve_forever()
+PYEOF
+    chmod +x "{{PING_SERVER_SCRIPT}}"
   fi
   start_ping_server
 fi
 
-set +e
+declare -A fail_counters
 
 while true; do
-  case "\$tunnel_type" in
-    ping)
-      if ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1; then
-        echo "[OK] Ping successful" | tee -a "$monitor_log"
+  case "$tunnel_type" in
+    ping | wireguard)
+      if ping -c 1 -W 2 "$target_ip" >/dev/null 2>&1; then
+        echo "[OK] $tunnel_type tunnel reachable" | tee -a "$log_file"
         fail_counter=0
       else
-        echo "[FAIL] Ping failed for \$target_ip" | tee -a "$monitor_log"
+        echo "[FAIL] $tunnel_type tunnel unreachable" | tee -a "$log_file"
         ((fail_counter++))
-        echo "❌ Failure count: \$fail_counter/\$fail_limit" | tee -a "$monitor_log"
+        echo "❌ Failure count: $fail_counter/$fail_limit" | tee -a "$log_file"
+        if [ "$fail_counter" -ge "$fail_limit" ]; then
+          echo "🔁 Restarting service: $service_name" | tee -a "$log_file"
+          systemctl restart "$service_name"
+          echo "⏳ Waiting $cooldown seconds after restart..." | tee -a "$log_file"
+          sleep "$cooldown"
+          fail_counter=0
+        fi
       fi
       ;;
 
     http)
-      declare -A fail_counters
-      while true; do
-        for port in "${port_array[@]}"; do
-          response=$(curl -s -o /dev/null -w "%{http_code}" "http://$target_ip:$port/ping")
+      for port in "${port_array[@]}"; do
+        response=$(curl -s -o /dev/null -w "%{http_code}" "http://$target_ip:$port/ping")
 
-          if [[ "$response" == "200" ]]; then
-            echo "[OK] Tunnel to $target_ip:$port is UP" | tee -a "$monitor_log"
-            fail_counters["$port"]=0
-          else
-            echo "[FAIL] HTTP check failed on port $port (status code: $response)" | tee -a "$monitor_log"
-            fail_counters["$port"]=$(( ${fail_counters["$port"]:-0} + 1 ))
-            echo "❌ Port $port failure count: ${fail_counters["$port"]}/$fail_limit" | tee -a "$monitor_log"
+        if [[ "$response" == "200" ]]; then
+          echo "[OK] Tunnel to $target_ip:$port is UP" | tee -a "$log_file"
+          fail_counters["$port"]=0
+        else
+          fail_counters["$port"]=$(( ${fail_counters["$port"]:-0} + 1 ))
+          echo "[FAIL] HTTP check failed on $target_ip:$port (status $response)" | tee -a "$log_file"
+          echo "❌ Port $port failure count: ${fail_counters["$port"]}/$fail_limit" | tee -a "$log_file"
 
-            if [[ \${fail_counters["\$port"]:-0} -ge $fail_limit ]]; then
-              echo "🔁 Restarting service: $service_name due to $fail_limit consecutive failures on port $port" | tee -a "$monitor_log"
-              systemctl restart "$service_name"
-              echo "⏳ Waiting $cooldown seconds after restart..." | tee -a "$monitor_log"
-              sleep "$cooldown"
-
-              # Reset all counters
-              for p in "${port_array[@]}"; do
-                fail_counters["$p"]=0
-              done
-              break 2  # exit both for loop and while loop
-            fi
+          if [[ ${fail_counters["$port"]} -ge $fail_limit ]]; then
+            echo "🔁 Restarting service: $service_name due to failures on port $port" | tee -a "$log_file"
+            systemctl restart "$service_name"
+            echo "⏳ Waiting $cooldown seconds after restart..." | tee -a "$log_file"
+            sleep "$cooldown"
+            for p in "${port_array[@]}"; do
+              fail_counters["$p"]=0
+            done
+            break
           fi
-        done
-        sleep 1
+        fi
       done
       ;;
-
-    wireguard)
-      if ping -c 1 -W 2 "\$target_ip" >/dev/null 2>&1; then
-        echo "[OK] WireGuard tunnel reachable" | tee -a "$monitor_log"
-        fail_counter=0
-      else
-        echo "[FAIL] WireGuard endpoint unreachable" | tee -a "$monitor_log"
-        ((fail_counter++))
-        echo "❌ Failure count: \$fail_counter/\$fail_limit" | tee -a "$monitor_log"
-      fi
-      ;;
-
-    *)
-      echo "❌ Unsupported tunnel type: \$tunnel_type" | tee -a "$monitor_log"
-      exit 1
-      ;;
   esac
-
-  if [ "\$fail_counter" -ge "\$fail_limit" ]; then
-    echo "🔁 Restarting service: \$service_name" | tee -a "$monitor_log"
-    systemctl restart "\$service_name"
-    echo "⏳ Waiting \$cooldown seconds after restart..." | tee -a "$monitor_log"
-    sleep "\$cooldown"
-    fail_counter=0
-  else
-    sleep 1
-  fi
+  sleep 1
 done
 EOF
 
+# جایگزینی مقادیر در فایل مانیتورینگ
+sed -i "s|{{TARGET_IP}}|$target_ip|g" "$monitor_script_path"
+sed -i "s|{{PORTS}}|$ports|g" "$monitor_script_path"
+sed -i "s|{{TUNNEL_TYPE}}|$tunnel_type|g" "$monitor_script_path"
+sed -i "s|{{SERVICE_NAME}}|$service_name|g" "$monitor_script_path"
+sed -i "s|{{FAIL_LIMIT}}|$fail_limit|g" "$monitor_script_path"
+sed -i "s|{{COOLDOWN}}|$cooldown|g" "$monitor_script_path"
+sed -i "s|{{PING_SERVER_PORT}}|$ping_server_port|g" "$monitor_script_path"
+sed -i "s|{{PING_SERVER_SCRIPT}}|$ping_server_script|g" "$monitor_script_path"
+sed -i "s|{{PING_SERVER_LOG}}|$ping_server_log|g" "$monitor_script_path"
+sed -i "s|{{MONITOR_LOG}}|$monitor_log|g" "$monitor_script_path"
+
 chmod +x "$monitor_script_path"
 
-service_file="/etc/systemd/system/tunnel-monitor.service"
-cat <<EOF > "$service_file"
+# systemd service
+cat <<EOF > /etc/systemd/system/tunnel-monitor.service
 [Unit]
 Description=Tunnel Port Monitor
 After=network.target
